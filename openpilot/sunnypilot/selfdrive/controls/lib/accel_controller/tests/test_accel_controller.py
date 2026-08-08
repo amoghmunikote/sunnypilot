@@ -81,7 +81,7 @@ class TestProfiles:
   def test_lookup_table_is_explicit_and_tunable(self):
     assert ACCEL_PROFILE_MAX_BP == [0.0, 3.0, 10.0, 25.0, 40.0]
     assert ACCEL_PROFILE_MAX_V == {
-      AccelProfile.eco: [1.65, 1.30, 0.72, 0.32, 0.16],
+      AccelProfile.eco: [1.67, 1.30, 0.72, 0.32, 0.16],
       AccelProfile.normal: [1.80, 1.51, 0.98, 0.49, 0.31],
       AccelProfile.sport: [2.00, 1.91, 1.16, 0.69, 0.43],
     }
