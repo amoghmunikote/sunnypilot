@@ -9,8 +9,8 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import Longi
 from openpilot.sunnypilot import get_sanitize_int_param
 from openpilot.sunnypilot.selfdrive.controls.lib.accel_controller.constants import (
   CAP_FILTER_FRAMES, COMFORT_DECEL, DEPARTURE_MOTION_NOISE_FLOOR, LAUNCH_END_SPEED, LAUNCH_TARGET_HEADROOM, LAUNCH_TARGET_SLEW,
-  LEAD_BRAKING_ACCEL_THRESHOLD, LEAD_DROPOUT_COAST_TIME, LEAD_LOSS_HOLD_TIME, LEAD_MATCH_ACCEL_SLEW, LEAD_MATCH_GAP_GAIN, LEAD_MATCH_SPEED_HEADROOM,
-  LEAD_SWITCH_MAX_HOLD_TIME,
+  LEAD_BRAKING_ACCEL_THRESHOLD, LEAD_DROPOUT_COAST_TIME, LEAD_LOSS_HOLD_TIME, LEAD_MATCH_ACCEL_SLEW, LEAD_MATCH_GAP_GAIN,
+  LEAD_MATCH_SPEED_HEADROOM, LEAD_SWITCH_MAX_HOLD_TIME,
   MATCHED_SPEED_DECEL_RATE, MPC_DECEL_JERK_COST_MULTIPLIER, MPC_DECEL_JERK_MAX_REQUIRED_DECEL, MPC_DECEL_JERK_MAX_REQUIRED_DECEL_RATE,
   MPC_DECEL_JERK_MAX_TARGET_REDUCTION, MPC_DECEL_TREND_FRAMES, SPEED_RELIEF_DEADBAND, SPEED_RESTRICT_DEADBAND, TARGET_SPEED_ARM_MARGIN,
   TARGET_RELEASE_SLEW, TARGET_SPEED_RESERVE, PLANNER_BRAKING_ACCEL_THRESHOLD, RADAR_STALE_TIMEOUT, STOP_HOLD_CREEP_DISTANCE, STOP_HOLD_EGO_SPEED,
@@ -67,7 +67,8 @@ class AccelController:
     self._param_frame += 1
 
   def _update_target(self, lead_plan: LeadPlan, base_speed: float, v_ego: float, profile: int, profile_max_accel: float,
-                     previous_should_stop: bool, previous_mpc_source, planner_speed: float, planner_accel: float) -> float:
+                     previous_should_stop: bool, previous_mpc_source, planner_speed: float, planner_accel: float,
+                     previous_plan_accel: float = 0.0) -> float:
     state = self.target_state
     lead_filter_ready = state.update_samples(lead_plan, self.dt)
     state.active_frames += 1
@@ -85,6 +86,8 @@ class AccelController:
                         and lead_plan.cap >= state.target_speed + SPEED_RELIEF_DEADBAND))
     state.update_lead_switch_guard(switched_to_relief, confirmed_relief, slot_changed or track_changed or false_relief,
                                    self.lead_loss_hold_frames, self.lead_switch_max_hold_frames)
+    if slot_changed or track_changed:
+      state.lead_braking = False
     if has_lead:
       state.selected_lead = lead_plan.selected_lead
       state.selected_lead_track_id = lead_plan.selected_lead_track_id
@@ -105,15 +108,19 @@ class AccelController:
       state.lead_braking = True
     elif not has_lead and state.lead_loss_frames >= self.lead_loss_hold_frames:
       state.lead_braking = False
-
     if state.target_speed is None:
       e2e_handoff = previous_mpc_source == LongitudinalPlanSource.e2e
       seed_from_ego = has_lead and planner_accel > PLANNER_BRAKING_ACCEL_THRESHOLD and not e2e_handoff
-      state.target_speed = min(base_speed, v_ego) if seed_from_ego else base_speed
+      braking_handoff = e2e_handoff and math.isfinite(previous_plan_accel) and previous_plan_accel <= PLANNER_BRAKING_ACCEL_THRESHOLD
+      if braking_handoff:
+        state.target_speed = min(base_speed, v_ego)
+        state.arm_release_slew()
+      else:
+        state.target_speed = min(base_speed, v_ego) if seed_from_ego else base_speed
       if seed_from_ego and v_ego >= LAUNCH_END_SPEED and lead_plan.closing_speed > 0.0:
         state.arm_release_slew()
-      state.e2e_braking_handoff = e2e_handoff and planner_accel < 0.0
-      state.state = AccelControllerState.free
+      state.e2e_braking_handoff = braking_handoff
+      state.state = AccelControllerState.hold if braking_handoff else AccelControllerState.free
       if v_ego < STOP_HOLD_EGO_SPEED and not stop_evidence:
         state.target_speed = min(base_speed, v_ego + LAUNCH_TARGET_HEADROOM)
         state.state = AccelControllerState.release
@@ -206,7 +213,10 @@ class AccelController:
         desired_accel_limit = min(profile_max_accel, max(recovery_speed - v_ego, 0.0))
       else:
         desired_accel_limit = 0.0
-      if state.filtered_lead_accel < LEAD_BRAKING_ACCEL_THRESHOLD:
+      same_braking_lead = (lead_plan.selected_lead_accel < LEAD_BRAKING_ACCEL_THRESHOLD
+        and state.filtered_lead_accel < LEAD_BRAKING_ACCEL_THRESHOLD
+        and not slot_changed and not track_changed and state.lead_switch_guard_frames == 0)
+      if state.filtered_lead_accel < LEAD_BRAKING_ACCEL_THRESHOLD and (planner_accel <= 0.0 or not same_braking_lead):
         desired_accel_limit = profile_max_accel
       if state.matched_accel_limit is None:
         state.matched_accel_limit = profile_max_accel
@@ -304,7 +314,7 @@ class AccelController:
 
   def update(self, radar_state, *, base_speed: float, v_ego: float, a_ego: float, follow_personality, acc_selected: bool,
              engaged: bool, cruise_initialized: bool, stock_accel_max: float, previous_should_stop: bool, radar_fresh: bool = True,
-             previous_mpc_source=None, planner_speed: float | None = None, planner_accel: float = 0.0) -> None:
+             previous_mpc_source=None, planner_speed: float | None = None, planner_accel: float = 0.0, previous_plan_accel: float = 0.0) -> None:
     self.profile = sanitize_profile(self.profile)
     sanitized_v_ego = max(v_ego, 0.0) if math.isfinite(v_ego) and v_ego >= -VEGO_NOISE_TOLERANCE else v_ego
     profile_max_accel = profile_accel_max(self.profile, sanitized_v_ego)
@@ -330,7 +340,7 @@ class AccelController:
     if active and radar_fresh:
       target_speed = self._update_target(
         lead_plan, base_speed, sanitized_v_ego, self.profile, profile_max_accel, previous_should_stop,
-        previous_mpc_source, planner_speed, planner_accel,
+        previous_mpc_source, planner_speed, planner_accel, previous_plan_accel,
       )
     elif active:
       target_speed = self.target_state.target_speed
@@ -343,10 +353,11 @@ class AccelController:
       lead_plan = LeadPlan(lead_status=has_radar_lead(radar_state))
 
     state = self.target_state
+    usable_lead = lead_plan.selected_lead >= 0
     stop_hold_active = active and state.state == AccelControllerState.stopHold
     matched_limit_active = active and state.matched_lead and state.matched_accel_limit is not None and not state.e2e_braking_handoff
-    lead_accel_request = active and lead_plan.selected_lead >= 0 and lead_plan.closing_speed <= 0.0 and planner_accel >= 0.0
-    profile_limit_active = active and not stop_hold_active and (state.launching or not lead_plan.lead_status or lead_accel_request)
+    lead_accel_request = active and usable_lead and lead_plan.closing_speed <= 0.0 and planner_accel >= 0.0
+    profile_limit_active = active and not stop_hold_active and (state.launching or not usable_lead or lead_accel_request)
     if matched_limit_active:
       effective_accel_max = min(positive_accel_max, state.matched_accel_limit)
     elif profile_limit_active:
@@ -354,8 +365,8 @@ class AccelController:
     else:
       effective_accel_max = math.inf
     mpc_accel_max = build_accel_ceiling(effective_accel_max, planner_accel) if matched_limit_active or profile_limit_active else None
-    guarded_lead_loss = not lead_plan.lead_status and state.selected_lead >= 0 and state.lead_loss_frames < self.lead_loss_hold_frames
-    lead_context = lead_plan.lead_status or math.isfinite(state.filtered_cap) or guarded_lead_loss
+    guarded_lead_loss = not usable_lead and state.selected_lead >= 0 and state.lead_loss_frames < self.lead_loss_hold_frames
+    lead_context = usable_lead or math.isfinite(state.filtered_cap) or guarded_lead_loss
     reserve_eligible = active and lead_context and not stop_hold_active and not state.launching and not state.e2e_braking_handoff
     reserve_can_arm = reserve_eligible and state.lead_switch_guard_frames == 0
     if not lead_context:
@@ -363,7 +374,6 @@ class AccelController:
     elif (reserve_can_arm and not state.speed_reserve_armed and math.isfinite(state.filtered_cap)
           and state.filtered_cap <= target_speed + TARGET_SPEED_ARM_MARGIN):
       state.speed_reserve_armed = True
-
     output_target = 0.0 if stop_hold_active else target_speed
     if reserve_eligible and state.speed_reserve_armed:
       output_target = max(0.0, output_target - TARGET_SPEED_RESERVE)
@@ -373,7 +383,7 @@ class AccelController:
     self.departure_launching = self.launching and state.departure_launch
     self.output_v_target = output_target
     self.mpc_accel_max = mpc_accel_max
-    start_cruise_accel_limit = (active and state.state == AccelControllerState.free and lead_plan.lead_status
+    start_cruise_accel_limit = (active and state.state == AccelControllerState.free and usable_lead
                                 and lead_plan.closing_speed > 0.0 and planner_accel >= 0.0
                                 and previous_mpc_source == LongitudinalPlanSource.cruise)
     keep_cruise_accel_limit = (self._cruise_accel_limited and active and lead_context and state.state == AccelControllerState.free

@@ -118,7 +118,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     is_e2e, v_cruise = LongitudinalPlannerSP.update_accel_controller(self, sm, v_cruise, prev_accel_constraint, accel_clip[1], reset_state)
 
     self.mpc.set_weights(prev_accel_constraint, personality=sm['selfdriveState'].personality)
-    self.mpc.set_cur_state(self.v_desired_filter.x, self.a_desired)
+    self.mpc.set_cur_state(self.v_desired_filter.x, self.mpc_accel_seed)
     self.mpc.update(sm['radarState'], v_cruise, personality=sm['selfdriveState'].personality)
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)

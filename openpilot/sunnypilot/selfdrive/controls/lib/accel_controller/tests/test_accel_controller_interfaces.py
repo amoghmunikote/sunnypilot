@@ -90,6 +90,9 @@ def planner_for_mpc_test(*, target_speed=15.0, active=True, is_e2e=False, mpc_ac
   planner.is_e2e = lambda _sm: is_e2e_calls.append(True) or is_e2e
   planner.output_v_target = 20.0
   planner.output_should_stop = False
+  planner._long_active_last_cycle = True
+  planner.previous_plan_accel = 0.0
+  planner.mpc_accel_seed = 0.0
   planner.allow_throttle = True
   planner.a_desired = 0.0
   planner.v_desired_filter = SimpleNamespace(x=10.0)
@@ -448,6 +451,7 @@ def test_controller_receives_previous_mpc_state_and_cached_radar_freshness():
   planner, _ = planner_for_mpc_test(mpc_source=log.LongitudinalPlan.LongitudinalPlanSource.lead0)
   planner._radar_fresh_this_cycle = True
   planner.a_desired = -0.4
+  planner.previous_plan_accel = -1.1
   planner.v_desired_filter = SimpleNamespace(x=9.5)
   prepare_controller_mpc(planner)
   received = planner.accel_controller.update_kwargs
@@ -455,7 +459,49 @@ def test_controller_receives_previous_mpc_state_and_cached_radar_freshness():
   assert received["previous_mpc_source"] == log.LongitudinalPlan.LongitudinalPlanSource.lead0
   assert received["planner_speed"] == 9.5
   assert received["planner_accel"] == -0.4
+  assert received["previous_plan_accel"] == -1.1
   assert received["radar_fresh"] is True
+
+
+def test_e2e_to_acc_handoff_uses_one_mpc_seed_without_mutating_planner_state():
+  planner, _ = planner_for_mpc_test(mpc_source=MpcLongitudinalPlanSource.e2e)
+  planner.previous_plan_accel = -1.1
+  planner.a_desired = 0.0
+  prepare_controller_mpc(planner)
+
+  assert planner.mpc_accel_seed == -1.1
+  assert planner.a_desired == 0.0
+
+
+def test_inactive_controller_does_not_change_e2e_to_acc_seed():
+  planner, _ = planner_for_mpc_test(active=False, mpc_source=MpcLongitudinalPlanSource.e2e)
+  planner.previous_plan_accel = -1.1
+  planner.a_desired = 0.0
+  prepare_controller_mpc(planner)
+
+  assert planner.mpc_accel_seed == planner.a_desired == 0.0
+
+
+def test_inactive_previous_cycle_does_not_restore_an_old_e2e_brake_plan():
+  planner, _ = planner_for_mpc_test(mpc_source=MpcLongitudinalPlanSource.e2e)
+  planner._long_active_last_cycle = False
+  planner.previous_plan_accel = -1.1
+  planner.a_desired = 0.0
+  prepare_controller_mpc(planner)
+
+  assert planner.mpc_accel_seed == planner.a_desired == 0.0
+  assert math.isinf(planner.accel_controller.update_kwargs["previous_plan_accel"])
+
+
+def test_failed_e2e_solution_does_not_seed_the_next_mpc_cycle():
+  planner, _ = planner_for_mpc_test(mpc_source=MpcLongitudinalPlanSource.e2e)
+  planner.mpc.last_solution_status = 1
+  planner.previous_plan_accel = -1.1
+  planner.a_desired = 0.0
+  prepare_controller_mpc(planner)
+
+  assert planner.mpc_accel_seed == planner.a_desired == 0.0
+  assert math.isinf(planner.accel_controller.update_kwargs["previous_plan_accel"])
 
 
 def test_controller_is_disabled_when_openpilot_longitudinal_control_is_unavailable():
@@ -475,6 +521,8 @@ def test_radar_freshness_is_computed_once_and_shared_with_dec_and_controller():
   planner.output_a_target = 0.0
   planner.output_v_target = 20.0
   planner.output_should_stop = False
+  planner._long_active_last_cycle = False
+  planner.previous_plan_accel = 0.0
   planner.allow_throttle = True
   planner.a_desired = 0.0
   planner.v_desired_filter = SimpleNamespace(x=10.0)

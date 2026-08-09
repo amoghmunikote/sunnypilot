@@ -368,11 +368,19 @@ def test_active_controller_uses_one_raw_mpc_solve_and_feasible_stock_bounds(prof
   assert trace.solver_failures == 0
 
 
-def test_e2e_to_radar_acc_handoff_keeps_braking_continuous():
+@pytest.mark.parametrize("lead_delay_frames", (0, 1), ids=("lead-present", "one-frame-lead-delay"))
+def test_e2e_to_radar_acc_handoff_keeps_braking_continuous(lead_delay_frames):
+  transition_frame = round(2.0 / DT_MDL)
+
+  def observe(current_time: float, _lead_name: str, truth: LeadObservation) -> LeadObservation | None:
+    frame = round(current_time / DT_MDL)
+    return None if transition_frame <= frame < transition_frame + lead_delay_frames else truth
+
   def run_handoff(controller_enabled: bool):
     plant = Plant(
       lead_relevancy=True, speed=10.0, distance_lead=30.0, actuator_delay=0.15, actuator_lag=0.20,
       model_action_fn=lambda current_time, _v_ego, _a_ego: (-1.0 if current_time < 2.0 else 0.0, False),
+      lead_observation_fn=observe,
     )
     _configure_plant(plant, enabled=controller_enabled)
     rows = []
@@ -389,11 +397,10 @@ def test_e2e_to_radar_acc_handoff_keeps_braking_continuous():
   transition = np.flatnonzero(time_values > 2.0)[0]
   baseline_jump = abs(baseline_accel[transition] - baseline_accel[transition - 1])
   controlled_jump = abs(acceleration[transition] - acceleration[transition - 1])
-  baseline_jerk = np.max(np.abs(np.diff(baseline_accel[transition:]) / DT_MDL))
   controlled_jerk = np.max(np.abs(np.diff(acceleration[transition:]) / DT_MDL))
 
-  assert controlled_jump <= baseline_jump + 1e-6
-  assert controlled_jerk <= baseline_jerk + 0.10
+  assert controlled_jump <= min(baseline_jump + 1e-6, 0.10)
+  assert controlled_jerk <= 0.25
   assert np.count_nonzero(solver_status[transition:]) <= np.count_nonzero(baseline_status[transition:])
   assert active[transition]
 

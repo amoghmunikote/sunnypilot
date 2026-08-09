@@ -208,6 +208,14 @@ class TestMpcCeiling:
     assert math.isinf(effective_accel_max(result))
     assert controller.target_state.target_speed is None
 
+  def test_invalid_raw_lead_keeps_profile_ceiling(self):
+    controller = make_controller()
+    invalid = make_radar(make_lead(status=True, d_rel=math.nan, v_lead_k=8.0))
+    result = update(controller, invalid, v_ego=10.0, profile=AccelProfile.eco)
+
+    assert result.selected_lead == -1
+    assert effective_accel_max(result) == pytest.approx(profile_accel_max(AccelProfile.eco, 10.0))
+
   def test_profile_ceiling_does_not_interfere_while_planner_is_braking(self):
     controller = make_controller()
     radar = restrictive_radar()
@@ -276,6 +284,23 @@ class TestMpcCeiling:
     accel_max = profile_accel_max(AccelProfile.normal, 8.0)
     assert effective_accel_max(braking) <= accel_max
     assert effective_accel_max(accelerating) <= accel_max
+
+  def test_matched_braking_lead_cannot_restore_positive_accel_limit(self):
+    controller = make_controller()
+    steady = make_radar(make_lead(status=True, d_rel=20.0, v_lead_k=8.0, radar_track_id=100))
+    for _ in range(CAP_FILTER_FRAMES + 10):
+      update(controller, steady, v_ego=10.0, planner_accel=-0.2)
+    for _ in range(30):
+      update(controller, steady, v_ego=8.0, planner_accel=-0.2)
+    before = controller.target_state.matched_accel_limit
+
+    braking = make_radar(make_lead(status=True, d_rel=20.0, v_lead_k=8.0, a_lead_k=-1.0, radar_track_id=100))
+    results = [update(controller, braking, v_ego=8.0, planner_accel=0.2) for _ in range(CAP_FILTER_FRAMES)]
+
+    assert before is not None and before > 0.1 and controller.target_state.matched_lead
+    assert all(result.selected_lead == 0 for result in results)
+    assert controller.target_state.matched_accel_limit < before
+    assert effective_accel_max(results[-1]) < before
 
   def test_matched_lead_ignores_two_frame_speed_jump(self):
     clean_controller, noisy_controller = make_controller(), make_controller()
@@ -403,6 +428,42 @@ class TestLead:
 
 
 class TestTargetLifecycle:
+  def test_e2e_braking_handoff_keeps_the_current_pace(self):
+    controller = make_controller()
+    result = update(
+      controller, base_speed=30.0, v_ego=17.2, planner_speed=17.15, planner_accel=0.0,
+      previous_mpc_source=LongitudinalPlanSource.e2e, previous_plan_accel=-1.1,
+    )
+
+    assert result.target_speed == pytest.approx(17.2)
+    assert result.state == AccelControllerState.hold
+    assert controller.target_state.e2e_braking_handoff
+    assert controller.target_state.release_slew_armed
+
+  def test_e2e_handoff_ignores_near_zero_acceleration_noise(self):
+    controller = make_controller()
+    result = update(
+      controller, base_speed=30.0, v_ego=17.2, planner_speed=17.15, planner_accel=0.0,
+      previous_mpc_source=LongitudinalPlanSource.e2e, previous_plan_accel=-0.01,
+    )
+
+    assert result.target_speed == 30.0
+    assert result.state == AccelControllerState.free
+    assert not controller.target_state.e2e_braking_handoff
+
+  def test_ineligible_e2e_handoff_cannot_restore_stale_braking(self):
+    controller = make_controller()
+    first = update(
+      controller, base_speed=30.0, v_ego=17.2, planner_speed=17.15, planner_accel=0.0,
+      previous_mpc_source=LongitudinalPlanSource.e2e, previous_plan_accel=math.inf,
+    )
+    recovered = update(controller, base_speed=30.0, v_ego=17.2, planner_speed=17.15, planner_accel=0.0,
+                       previous_mpc_source=LongitudinalPlanSource.cruise)
+
+    assert first.target_speed == recovered.target_speed == 30.0
+    assert recovered.state == AccelControllerState.free
+    assert not controller.target_state.e2e_braking_handoff
+
   def test_five_frame_median_needs_three_restrictive_samples(self):
     controller = make_controller()
     filtered_caps = []
@@ -485,7 +546,6 @@ class TestTargetLifecycle:
       before = update(controller, original, base_speed=25.0, v_ego=10.0, planner_speed=10.0, planner_accel=0.2)
     assert before.state in (AccelControllerState.restrict, AccelControllerState.hold)
     assert controller.target_state.speed_reserve_armed
-
     replacement = make_radar(make_lead(status=True, d_rel=90.0, v_lead_k=12.0, radar_track_id=-1))
     switched = update(controller, replacement, base_speed=25.0, v_ego=10.0, planner_speed=10.0, planner_accel=0.2)
 
@@ -776,6 +836,18 @@ class TestTargetLifecycle:
     result = update(controller, far_stopped, base_speed=12.0, v_ego=0.2, planner_accel=-0.2)
     assert result.state != AccelControllerState.stopHold
     assert result.target_speed > 0.0
+
+  def test_replacement_lead_does_not_inherit_braking_history(self):
+    controller = make_controller()
+    braking = make_radar(make_lead(status=True, d_rel=20.0, v_lead_k=8.0, radar_track_id=100))
+    for _ in range(controller.lead_loss_hold_frames):
+      update(controller, braking, planner_accel=-0.2)
+    assert controller.target_state.lead_braking
+
+    replacement = make_radar(make_lead(status=True, d_rel=20.0, v_lead_k=8.0, radar_track_id=200))
+    update(controller, replacement, planner_accel=0.0)
+
+    assert not controller.target_state.lead_braking
 
   def test_near_stopped_lead_uses_braking_history_to_hold_completed_stop(self):
     controller = make_controller()
