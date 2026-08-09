@@ -332,6 +332,19 @@ class DynamicExperimentalController:
     except (AttributeError, IndexError, OverflowError, TypeError, ValueError):
       return False
 
+  def _lead_dropout_model_handoff_ready(self) -> bool:
+    if (not self._active or self._CP.radarUnavailable or not self._radar_fresh or self._has_any_lead or not self._has_radar_acc_lead
+        or self._mode_manager.get_mode() != 'acc' or self._mpc.last_solution_status != 0):
+      return False
+    try:
+      model_accel = float(self._model_accel_samples[-1])
+    except (IndexError, OverflowError, TypeError, ValueError):
+      return False
+    return (math.isfinite(model_accel) and math.isfinite(self._planner_accel)
+            and self._planner_accel <= WMACConstants.MODEL_DECEL_START
+            and model_accel <= WMACConstants.MODEL_DECEL_START
+            and model_accel <= self._planner_accel + WMACConstants.MODEL_DECEL_TREND_MAX_COMMAND_STEP)
+
   def _desired_mode(self) -> tuple[ModeType, bool]:
     standstill = self._standstill_count > WMACConstants.STANDSTILL_FRAMES
     urgent_slow_down = self._has_slow_down and self._raw_urgency > WMACConstants.URGENT_SLOW_DOWN_PROB
@@ -344,6 +357,12 @@ class DynamicExperimentalController:
     if (radar_stale or not self._has_any_lead) and (self._has_mpc_fcw or urgent_slow_down):
       self._radar_acc_lead_frames = 0
       self._has_radar_acc_lead = False
+      return 'blended', True
+
+    if self._lead_dropout_model_handoff_ready():
+      self._radar_acc_lead_frames = 0
+      self._has_radar_acc_lead = False
+      self._model_decel_latched = True
       return 'blended', True
 
     if not self._CP.radarUnavailable and self._has_radar_acc_lead:

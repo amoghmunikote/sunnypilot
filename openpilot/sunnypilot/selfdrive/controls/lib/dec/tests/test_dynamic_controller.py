@@ -78,6 +78,7 @@ def mock_mpc():
   class MPC:
     crash_cnt = 0
     a_solution = [0.0, 0.0]
+    last_solution_status = 0
   return MPC()
 
 
@@ -450,6 +451,57 @@ def test_lead_flicker_hold_prevents_one_frame_mode_flip(mock_cp, mock_mpc, defau
   controller.update(default_sm)
 
   assert controller._has_lead_filtered
+  assert controller.mode() == "acc"
+
+
+def test_braking_model_takes_over_on_the_first_fresh_full_lead_dropout(mock_cp, mock_mpc, default_sm):
+  controller = DynamicExperimentalController(mock_cp, mock_mpc, params=MockParams())
+  default_sm['modelV2'] = MockModelData(valid=False, desired_acceleration=-1.1)
+  controller.update(default_sm, planner_accel=-1.2)
+
+  default_sm['radarState'] = MockRadarState(status=0.0)
+  controller.update(default_sm, planner_accel=-1.2)
+
+  assert not controller._has_radar_acc_lead
+  assert controller._model_decel_latched
+  assert controller.mode() == "blended"
+
+
+@pytest.mark.parametrize(("model_accel", "planner_accel"), ((-0.75, -1.1), (-0.3, -1.1), (-1.1, -0.3)))
+def test_lead_dropout_guard_stays_active_without_a_matching_brake(model_accel, planner_accel, mock_cp, mock_mpc, default_sm):
+  controller = DynamicExperimentalController(mock_cp, mock_mpc, params=MockParams())
+  controller.update(default_sm, planner_accel=-1.1)
+  default_sm['modelV2'] = MockModelData(valid=False, desired_acceleration=model_accel)
+  default_sm['radarState'] = MockRadarState(status=0.0)
+
+  controller.update(default_sm, planner_accel=planner_accel)
+
+  assert controller._has_radar_acc_lead
+  assert controller.mode() == "acc"
+
+
+def test_failed_mpc_keeps_the_lead_dropout_guard(mock_cp, mock_mpc, default_sm):
+  controller = DynamicExperimentalController(mock_cp, mock_mpc, params=MockParams())
+  controller.update(default_sm, planner_accel=-1.1)
+  mock_mpc.last_solution_status = 1
+  default_sm['modelV2'] = MockModelData(valid=False, desired_acceleration=-1.1)
+  default_sm['radarState'] = MockRadarState(status=0.0)
+
+  controller.update(default_sm, planner_accel=-1.1)
+
+  assert controller._has_radar_acc_lead
+  assert controller.mode() == "acc"
+
+
+def test_matching_brake_without_a_prior_radar_lead_does_not_use_dropout_handoff(mock_cp, mock_mpc, default_sm):
+  controller = DynamicExperimentalController(mock_cp, mock_mpc, params=MockParams())
+  default_sm['radarState'] = MockRadarState(status=0.0)
+  default_sm['modelV2'] = MockModelData(valid=False, desired_acceleration=-1.1)
+
+  controller.update(default_sm, planner_accel=-1.1)
+
+  assert not controller._has_radar_acc_lead
+  assert not controller._model_decel_latched
   assert controller.mode() == "acc"
 
 
