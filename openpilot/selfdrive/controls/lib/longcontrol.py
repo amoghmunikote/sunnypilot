@@ -42,6 +42,7 @@ def long_control_state_trans(CP_SP, active, long_control_state,
 
 class LongControl(LongControlSP):
   def __init__(self, CP, CP_SP):
+    LongControlSP.__init__(self)
     self.CP = CP
     self.CP_SP = CP_SP
     self.long_control_state = LongCtrlState.off
@@ -61,6 +62,7 @@ class LongControl(LongControlSP):
     self.long_control_state = long_control_state_trans(self.CP_SP, active, self.long_control_state,
                                                        should_stop, CS.brakePressed,
                                                        CS.cruiseState.standstill)
+    LongControlSP.update_state(self, self.long_control_state == LongCtrlState.stopping)
     if self.long_control_state == LongCtrlState.off:
       self.reset()
       output_accel = 0.

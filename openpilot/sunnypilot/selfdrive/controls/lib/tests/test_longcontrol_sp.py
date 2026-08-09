@@ -10,11 +10,12 @@ from opendbc.car.toyota.values import CAR as TOYOTA
 from opendbc.car.volkswagen.values import CAR as VOLKSWAGEN
 from openpilot.selfdrive.controls.lib.drive_helpers import should_stop
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
-from openpilot.sunnypilot.selfdrive.controls.lib.longcontrol import STOPPED_SPEED
+from openpilot.sunnypilot.selfdrive.controls.lib.longcontrol import STOPPED_SPEED, STOPPING_SETTLE_FRAMES
 from openpilot.sunnypilot.selfdrive.test.longitudinal_maneuvers.plant import PRIUS_TSS2_ROUTE_MODEL, PlantSP
 
 
 STOP_ACCEL_VEHICLES = (TOYOTA.TOYOTA_RAV4_TSS2, HONDA.HONDA_CIVIC_2022, VOLKSWAGEN.VOLKSWAGEN_ARTEON_MK1, RIVIAN.RIVIAN_R1)
+SETTLE_VEHICLES = (TOYOTA.TOYOTA_RAV4_TSS2, HONDA.HONDA_CIVIC_2022, VOLKSWAGEN.VOLKSWAGEN_ARTEON_MK1)
 ROUTE_STOP_ONSETS = (
   (0.280, -0.290, -0.220, -0.220), (0.290, -0.497, -0.270, -0.302), (0.464, -0.223, -0.264, -0.292),
   (0.467, -0.582, -0.316, -0.359),
@@ -109,7 +110,10 @@ def test_planner_noise_cannot_release_the_brake():
   assert all(current <= previous for previous, current in zip(outputs[:-1], outputs[1:], strict=True))
 
 
-@pytest.mark.parametrize(("v_ego", "a_ego", "a_target"), ((float("nan"), -0.3, -0.1), (0.3, float("nan"), -0.1), (0.3, -0.3, float("nan"))))
+@pytest.mark.parametrize(("v_ego", "a_ego", "a_target"), (
+  (float("nan"), -0.3, -0.1), (0.3, float("nan"), -0.1), (0.3, -0.3, float("nan")),
+  (float("inf"), -0.3, -0.1), (0.3, -float("inf"), -0.1), (0.3, -0.3, float("inf")),
+))
 def test_invalid_state_uses_the_stock_ramp(v_ego, a_ego, a_target):
   CP, control = make_control(TOYOTA.TOYOTA_RAV4_TSS2)
   output = control.update(True, make_car_state(v_ego, a_ego), a_target, True, (-3.5, 2.0))
@@ -150,6 +154,37 @@ def test_standstill_uses_the_stock_ramp(candidate):
   assert outputs[-1] == pytest.approx(expected)
 
 
+@pytest.mark.parametrize("candidate", SETTLE_VEHICLES)
+def test_final_stop_holds_brake_until_vehicle_settles(candidate):
+  CP, control = make_control(candidate)
+  control.update(True, make_car_state(0.28, -0.29), -0.22, True, (-3.5, 2.0))
+  outputs = [control.update(True, make_car_state(0.0006, a_ego, standstill=True), -0.032, True, (-3.5, 2.0))
+             for a_ego in (-1.098, -0.950, -0.609, -0.286)]
+  assert outputs == pytest.approx([-0.33] * len(outputs))
+
+  settled = make_car_state(0.0, -0.065, standstill=True)
+  output = control.update(True, settled, -0.032, True, (-3.5, 2.0))
+  assert output == pytest.approx(stock_stopping_output(-0.33, CP.stopAccel))
+
+
+@pytest.mark.parametrize("a_ego", (-0.09, 0.0, 0.1))
+def test_settled_vehicle_uses_the_stock_hold_ramp(a_ego):
+  CP, control = make_control(TOYOTA.TOYOTA_RAV4_TSS2)
+  output = control.update(True, make_car_state(0.0, a_ego, standstill=True), -0.1, True, (-3.5, 2.0))
+  assert output == pytest.approx(stock_stopping_output(-0.33, CP.stopAccel))
+
+
+@pytest.mark.parametrize("candidate", SETTLE_VEHICLES)
+def test_final_settling_hold_is_bounded(candidate):
+  CP, control = make_control(candidate)
+  control.update(True, make_car_state(0.28, -0.29), -0.22, True, (-3.5, 2.0))
+  CS = make_car_state(0.0, -0.3, standstill=True)
+  outputs = [control.update(True, CS, -0.1, True, (-3.5, 2.0)) for _ in range(STOPPING_SETTLE_FRAMES + 1)]
+
+  assert outputs[:STOPPING_SETTLE_FRAMES] == pytest.approx([-0.33] * STOPPING_SETTLE_FRAMES)
+  assert outputs[-1] == pytest.approx(stock_stopping_output(-0.33, CP.stopAccel))
+
+
 @pytest.mark.parametrize(("v_ego", "a_ego", "standstill"), ((0.6, -0.1, False), (0.0, 0.0, True)))
 def test_stopping_never_releases_a_stronger_command(v_ego, a_ego, standstill):
   _, control = make_control(TOYOTA.TOYOTA_RAV4_TSS2, -3.0)
@@ -174,6 +209,50 @@ def test_rollback_uses_the_stock_ramp():
   CP, control = make_control(TOYOTA.TOYOTA_RAV4_TSS2)
   output = control.update(True, make_car_state(-0.1, 0.1), -0.1, True, (-3.5, 2.0))
   assert output == pytest.approx(stock_stopping_output(-0.33, CP.stopAccel))
+
+
+def test_rollback_after_settling_arms_uses_the_stock_ramp():
+  CP, control = make_control(TOYOTA.TOYOTA_RAV4_TSS2)
+  control.update(True, make_car_state(0.28, -0.29), -0.22, True, (-3.5, 2.0))
+  control.update(True, make_car_state(0.01, -0.3), -0.1, True, (-3.5, 2.0))
+  output = control.update(True, make_car_state(-0.04, -0.3), -0.1, True, (-3.5, 2.0))
+
+  assert output == pytest.approx(stock_stopping_output(-0.33, CP.stopAccel))
+
+
+def test_small_velocity_noise_does_not_interrupt_final_settling():
+  _, control = make_control(TOYOTA.TOYOTA_RAV4_TSS2)
+  control.update(True, make_car_state(0.28, -0.29), -0.22, True, (-3.5, 2.0))
+  output = control.update(True, make_car_state(-0.04, -0.3, standstill=True), -0.1, True, (-3.5, 2.0))
+  assert output == pytest.approx(-0.33)
+
+
+def test_terminal_speed_chatter_cannot_extend_settling_hold():
+  CP, control = make_control(TOYOTA.TOYOTA_RAV4_TSS2)
+  control.update(True, make_car_state(0.28, -0.29), -0.22, True, (-3.5, 2.0))
+  outputs = [control.update(True, make_car_state(0.019 if frame % 2 == 0 else 0.021, -0.3), -0.1, True, (-3.5, 2.0))
+             for frame in range(STOPPING_SETTLE_FRAMES + 2)]
+
+  assert outputs[STOPPING_SETTLE_FRAMES] == pytest.approx(stock_stopping_output(-0.33, CP.stopAccel))
+  assert outputs[-1] < outputs[STOPPING_SETTLE_FRAMES]
+
+
+def test_terminal_speed_plateau_cannot_extend_settling_hold():
+  CP, control = make_control(TOYOTA.TOYOTA_RAV4_TSS2)
+  control.update(True, make_car_state(0.28, -0.29), -0.22, True, (-3.5, 2.0))
+  CS = make_car_state(0.03, -0.3)
+  outputs = [control.update(True, CS, -0.1, True, (-3.5, 2.0)) for _ in range(STOPPING_SETTLE_FRAMES + 1)]
+
+  assert outputs[-1] == pytest.approx(stock_stopping_output(-0.33, CP.stopAccel))
+
+
+def test_interrupted_stop_cannot_reuse_settling_hold():
+  CP, control = make_control(TOYOTA.TOYOTA_RAV4_TSS2)
+  control.update(True, make_car_state(0.28, -0.29), -0.22, True, (-3.5, 2.0))
+  control.update(False, make_car_state(0.0, 0.0, standstill=True), 0.0, False, (-3.5, 2.0))
+  output = control.update(True, make_car_state(0.0, -0.3, standstill=True), -0.1, True, (-3.5, 2.0))
+
+  assert output == pytest.approx(stock_stopping_output(0.0, CP.stopAccel))
 
 
 def test_departure_uses_the_stock_pid_path():
