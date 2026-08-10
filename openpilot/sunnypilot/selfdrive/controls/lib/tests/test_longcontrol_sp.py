@@ -64,6 +64,39 @@ def test_logged_stop_onsets_hold_the_existing_brake(v_ego, a_ego, a_target, init
   assert output == pytest.approx(initial_accel)
 
 
+def test_glide_hold_survives_a_soft_deceleration_sample():
+  _, control = make_control(TOYOTA.TOYOTA_RAV4_TSS2, -0.166)
+  samples = ((0.388, -0.201, -0.164), (0.330, -0.120, -0.140), (0.283, -0.0675, -0.120))
+  outputs = [control.update(True, make_car_state(v_ego, a_ego), a_target, True, (-3.5, 2.0))
+             for v_ego, a_ego, a_target in samples]
+
+  assert outputs == pytest.approx([-0.166] * len(samples))
+
+
+def test_glide_hold_releases_when_the_vehicle_stops_decelerating():
+  CP, control = make_control(TOYOTA.TOYOTA_RAV4_TSS2, -0.166)
+  control.update(True, make_car_state(0.388, -0.201), -0.164, True, (-3.5, 2.0))
+  output = control.update(True, make_car_state(0.330, -0.01), -0.140, True, (-3.5, 2.0))
+
+  assert output == pytest.approx(stock_stopping_output(-0.166, CP.stopAccel))
+
+
+def test_glide_hold_keeps_the_stopping_distance_bounded():
+  CP, control = make_control(TOYOTA.TOYOTA_RAV4_TSS2, -0.166)
+  control.update(True, make_car_state(0.388, -0.201), -0.164, True, (-3.5, 2.0))
+  output = control.update(True, make_car_state(0.400, -0.050), -0.140, True, (-3.5, 2.0))
+
+  assert output == pytest.approx(stock_stopping_output(-0.166, CP.stopAccel))
+
+
+def test_glide_hold_yields_to_stronger_planner_braking():
+  CP, control = make_control(TOYOTA.TOYOTA_RAV4_TSS2, -0.166)
+  control.update(True, make_car_state(0.388, -0.201), -0.164, True, (-3.5, 2.0))
+  output = control.update(True, make_car_state(0.330, -0.120), -1.0, True, (-3.5, 2.0))
+
+  assert output == pytest.approx(stock_stopping_output(-0.166, CP.stopAccel))
+
+
 @pytest.mark.parametrize("candidate", STOP_ACCEL_VEHICLES)
 def test_urgent_braking_matches_the_stock_ramp(candidate):
   CP, control = make_control(candidate)

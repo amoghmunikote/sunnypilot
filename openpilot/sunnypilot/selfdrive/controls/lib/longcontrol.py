@@ -37,7 +37,8 @@ class LongControlSP:
     can_hold = self.last_output_accel <= 0.0 and a_target >= self.last_output_accel
     terminal_speed = (0.0 <= CS.vEgo <= STOPPING_SPEED_TOLERANCE + 1e-6
                       or CS.standstill and abs(CS.vEgo) <= STOPPING_SPEED_TOLERANCE + 1e-6)
-    moving = (not terminal_speed and CS.vEgo > STOPPED_SPEED and CS.aEgo < 0.0 and CS.vEgo <= -CS.aEgo * STOPPING_TIME
+    holding = self._stopping_settle_frames == 0
+    moving = (not terminal_speed and CS.vEgo > STOPPED_SPEED and CS.aEgo < 0.0 and (holding or CS.vEgo <= -CS.aEgo * STOPPING_TIME)
               and CS.vEgo ** 2 <= -2.0 * CS.aEgo * STOPPING_DISTANCE)
     if moving and can_hold and self._stopping_settle_frames in (None, 0):
       self._stopping_settle_frames = 0
