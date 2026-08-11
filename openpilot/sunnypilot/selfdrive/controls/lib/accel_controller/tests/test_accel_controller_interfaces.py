@@ -50,10 +50,12 @@ class ControllerStub:
     self.selected_lead_track_id = selected_lead_track_id
     self.launching = launching
     self.departure_launching = departure_launching
+    self.pace = SimpleNamespace(departure_launching=departure_launching, stop_hold=state == AccelControllerState.stopHold)
     self.required_decel = required_decel
     self.dt = DT_MDL
     self._jerk_smoothing_blocked = False
     self._required_decel_samples = []
+    self._required_decel_long_samples = []
     self._required_decel_lead = -1
     self._required_decel_lead_track_id = -1
     self._lead_trend_warmup = False

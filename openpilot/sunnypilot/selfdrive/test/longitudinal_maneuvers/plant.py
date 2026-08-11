@@ -368,8 +368,7 @@ class PlantSP(Plant):
     self.rk.monitor_time()
 
     accel_controller = self.planner.accel_controller
-    lead_plan = accel_controller._held_lead_plan
-    target_state = accel_controller.target_state
+    pace = accel_controller.pace
     return {
       "distance": self.distance,
       "speed": self.speed,
@@ -390,8 +389,8 @@ class PlantSP(Plant):
       "dec_mode": self.planner.dec.mode(),
       "controller_target": accel_controller.output_v_target,
       "base_target": self.planner.output_v_target,
-      "raw_energy_cap": lead_plan.cap if lead_plan is not None else math.inf,
-      "live_filtered_cap": target_state.filtered_cap,
+      "raw_energy_cap": pace.raw_cap,
+      "live_filtered_cap": pace.cap_trusted,
       "model_action": {
         "desiredAcceleration": float(model_acceleration),
         "shouldStop": bool(model_should_stop),

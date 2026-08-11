@@ -12,7 +12,7 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalPlanSource as MpcLongitudinalPlanSource
 from openpilot.sunnypilot.selfdrive.controls.lib.accel_controller.accel_controller import AccelController, AccelControllerState
-from openpilot.sunnypilot.selfdrive.controls.lib.accel_controller.constants import PLANNER_BRAKING_ACCEL_THRESHOLD
+from openpilot.sunnypilot.selfdrive.controls.lib.accel_controller.constants import BRAKING_ACCEL_THRESHOLD
 from openpilot.sunnypilot.selfdrive.controls.lib.dec.dec import DynamicExperimentalController
 from openpilot.sunnypilot.selfdrive.controls.lib.e2e_alerts_helper import E2EAlertsHelper
 from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.smart_cruise_control import SmartCruiseControl
@@ -65,13 +65,13 @@ class LongitudinalPlannerSP:
       sm['radarState'], base_speed=self.output_v_target, v_ego=sm['carState'].vEgo, a_ego=sm['carState'].aEgo,
       follow_personality=sm['selfdriveState'].personality, acc_selected=not is_e2e,
       engaged=not reset_state and not force_decel, cruise_initialized=sm['carState'].vCruise != V_CRUISE_UNSET,
-      stock_accel_max=stock_accel_max if self.allow_throttle else 0.0, previous_should_stop=self.output_should_stop,
+      stock_accel_max=stock_accel_max if self.allow_throttle else 0.0,
       radar_fresh=self._radar_fresh_this_cycle, previous_mpc_source=self.mpc.source, planner_speed=self.v_desired_filter.x,
       planner_accel=self.a_desired, previous_plan_accel=previous_plan_accel,
     )
     controller = self.accel_controller
     braking_handoff = (controller.is_active and not is_e2e and not previous_mpc_failed and self.mpc.source == MpcLongitudinalPlanSource.e2e
-                       and previous_plan_accel <= PLANNER_BRAKING_ACCEL_THRESHOLD)
+                       and previous_plan_accel <= BRAKING_ACCEL_THRESHOLD)
     if braking_handoff:
       self.mpc_accel_seed = min(self.a_desired, previous_plan_accel)
     actuating = controller.is_active and not is_e2e and not force_decel and not previous_mpc_failed

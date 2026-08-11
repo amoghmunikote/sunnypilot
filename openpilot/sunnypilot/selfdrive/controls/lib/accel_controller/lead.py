@@ -16,8 +16,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
 )
 from openpilot.selfdrive.controls.radard import _LEAD_ACCEL_TAU
 from openpilot.sunnypilot.selfdrive.controls.lib.accel_controller.constants import (
-  COMFORT_DECEL, MAX_LEAD_ACCEL_TAU, MIN_LEAD_SPEED, STOP_GAP_RESERVE, STOP_GAP_RESERVE_DECEL_BP,
-  STOP_GAP_RESERVE_LEAD_SPEED, STOPPED_LEAD_SPEED, sanitize_profile,
+  COMFORT_DECEL, MAX_LEAD_ACCEL_TAU, MIN_LEAD_SPEED, STOP_GAP_RESERVE, STOP_HOLD_SPEED_FLOOR, sanitize_profile,
 )
 
 
@@ -108,9 +107,7 @@ def calculate_lead_plan(radar_state, v_ego: float, a_ego: float, delay: float, p
     safety_gap = max(x_lead - x_ego - STOP_DISTANCE - t_follow * v_lead_delay, 0.0)
     closing_speed = max(v_ego_delay - v_lead_delay, 0.0)
     required_decel = 0.0 if closing_speed == 0.0 else math.inf if safety_gap == 0.0 else closing_speed**2 / (2.0 * safety_gap)
-    reserve = float(np.interp(v_lead_delay, (0.0, STOP_GAP_RESERVE_LEAD_SPEED), (STOP_GAP_RESERVE, 0.0)))
-    reserve_scale = float(np.interp(required_decel, STOP_GAP_RESERVE_DECEL_BP, (1.0, 0.0)))
-    usable_gap = max(safety_gap - reserve * reserve_scale, 0.0)
+    usable_gap = max(safety_gap - STOP_GAP_RESERVE, 0.0)
     cap = v_lead_delay + math.sqrt(2.0 * comfort_decel * usable_gap)
     departure_cap = v_lead_delay + math.sqrt(2.0 * comfort_decel * safety_gap)
     separation = x_lead - x_ego
@@ -143,5 +140,5 @@ def calculate_lead_plan(radar_state, v_ego: float, a_ego: float, delay: float, p
     departure_lead_index=departure_lead_index, departure_lead_speed=departure_lead_speed,
     departure_cap=departure_caps[departure_lead_index], departure_lead_speeds=tuple(departure_speeds),
     departure_lead_distances=tuple(departure_distances), departure_lead_track_ids=tuple(departure_track_ids),
-    departure_lead_separations=tuple(departure_separations), has_nearly_stopped_lead=departure_lead_speed < STOPPED_LEAD_SPEED,
+    departure_lead_separations=tuple(departure_separations), has_nearly_stopped_lead=departure_lead_speed < STOP_HOLD_SPEED_FLOOR,
   )
