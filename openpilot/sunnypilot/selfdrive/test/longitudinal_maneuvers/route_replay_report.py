@@ -82,6 +82,7 @@ class RouteRunResult:
   solver_failure_rate: float
   speed_frozen: bool
   lead_presence_fraction: float
+  stuck_despite_go_signal: bool
   trace: SimpleTrace
   distance: np.ndarray = field(repr=False)
   distance_lead: np.ndarray = field(repr=False)
@@ -130,7 +131,7 @@ def replay_route(
   v_cruise_fn = route.v_cruise_fn()
   lead_present_fn = route.lead_one.present
 
-  times, a_targets, accelerations, distances, distances_lead, speeds, lead_present = [], [], [], [], [], [], []
+  times, a_targets, accelerations, distances, distances_lead, speeds, lead_present, controller_targets = [], [], [], [], [], [], [], []
   try:
     while plant.current_time < end_time:
       current_time = plant.current_time
@@ -142,6 +143,7 @@ def replay_route(
       distances_lead.append(result["distance_lead"])
       speeds.append(result["speed"])
       lead_present.append(lead_present_fn.at(current_time) >= 0.5)
+      controller_targets.append(result["controller_target"])
   finally:
     plant.planner.mpc.reset = original_mpc_reset
   gc.collect()
@@ -153,6 +155,7 @@ def replay_route(
   distance_lead = np.asarray(distances_lead)
   speed = np.asarray(speeds)
   lead_present_arr = np.asarray(lead_present, dtype=bool)
+  controller_target = np.asarray(controller_targets)
 
   trace = SimpleTrace(time=time, a_target=a_target, acceleration=acceleration)
   command_jerk = _command_jerk(trace) if time.size >= 2 else np.asarray([0.0])
@@ -170,6 +173,17 @@ def replay_route(
   # v_lead_fn - so a low-presence route makes min_gap/gap_violation an ever-growing harness
   # artifact rather than a real finding. Flag it instead of printing a silent false violation.
   lead_presence_fraction = float(lead_present_arr.mean()) if lead_present_arr.size else 0.0
+  # ego is closed-loop, the lead is open-loop (replayed verbatim) - if ego's own simulated speed
+  # ever falls to a full stop while the real recorded lead keeps moving on its own real trajectory,
+  # the two diverge: every subsequent "gap"/closing-speed reading the MPC's obstacle cost sees is
+  # computed against a lead position that assumed a moving ego, not a stalled one, and can look like
+  # an imminent collision regardless of what AccelController's own target_speed says. Confirmed on a
+  # real route: AccelController's controller_target stayed at ~full v_cruise (a clean "go" signal)
+  # for over 300s while sim speed stayed pinned at 0 - not a controller defect, a replay-fidelity
+  # limit. Flag it structurally: sustained near-zero speed despite a controller_target that says go.
+  stuck_despite_go_signal = bool(np.any(
+    (np.abs(speed) < 0.1) & (controller_target > 5.0)
+  )) and float(np.sum((np.abs(speed) < 0.1) & (controller_target > 5.0)) * (time[1] - time[0] if time.size > 1 else 0.0)) > 30.0
 
   return RouteRunResult(
     route_id=route.identifier, sweep=sweep, duration=float(end_time), frames=time.size, solver_failures=solver_failures,
@@ -177,7 +191,7 @@ def replay_route(
     command_jerk_p95=float(np.percentile(np.abs(command_jerk), 95)), realized_jerk_p95=float(np.percentile(np.abs(realized_jerk), 95)),
     realized_jerk_max=float(np.max(np.abs(realized_jerk))), min_gap_with_lead=min_gap_with_lead,
     gap_violation=bool(min_gap_with_lead < STOP_DISTANCE), solver_failure_rate=solver_failure_rate, speed_frozen=speed_frozen,
-    lead_presence_fraction=lead_presence_fraction,
+    lead_presence_fraction=lead_presence_fraction, stuck_despite_go_signal=stuck_despite_go_signal,
     trace=trace, distance=distance, distance_lead=distance_lead, speed=speed, lead_present=lead_present_arr,
   )
 
@@ -209,6 +223,12 @@ def _print_report(results: list[RouteRunResult]) -> None:
       flags.append(
         f"UNRELIABLE min_gap/GAP<STOP_DISTANCE (lead present only {r.lead_presence_fraction:.0%} of frames - "
         + "distance_lead freezes rather than re-anchors during absence, see route_replay.py's v_lead_fn docstring)"
+      )
+    if r.stuck_despite_go_signal:
+      flags.append(
+        "STUCK DESPITE GO SIGNAL (sim speed pinned near 0 for 30s+ while controller_target says go) - "
+        + "likely closed-loop-ego/open-loop-lead divergence, not necessarily an AccelController defect; "
+        + "pump_cycle/brake_coast_brake/min_gap on this row are not meaningful"
       )
     print(
       f"{r.route_id:<48} {sweep_label:<24} {r.duration:6.1f} {r.frames:7d} {r.solver_failures:11d} " +
