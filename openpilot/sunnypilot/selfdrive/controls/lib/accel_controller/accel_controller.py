@@ -142,7 +142,7 @@ class AccelController:
 
     matched_limit_active = pace.matched_lead and pace.matched_accel_limit is not None and not pace.e2e_braking_handoff
     lead_accel_request = pace.matched_lead and planner_accel >= 0.0
-    profile_limit_active = (not pace.stop_hold and not pace.launching and (not pace.has_lead or lead_accel_request)
+    profile_limit_active = (not pace.stop_hold and (not pace.has_lead or lead_accel_request)
                             and not pace.e2e_braking_handoff)
     if matched_limit_active:
       effective_accel_max = min(positive_accel_max, pace.matched_accel_limit)
