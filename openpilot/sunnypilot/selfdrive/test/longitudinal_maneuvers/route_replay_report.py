@@ -180,10 +180,19 @@ def replay_route(
   # an imminent collision regardless of what AccelController's own target_speed says. Confirmed on a
   # real route: AccelController's controller_target stayed at ~full v_cruise (a clean "go" signal)
   # for over 300s while sim speed stayed pinned at 0 - not a controller defect, a replay-fidelity
-  # limit. Flag it structurally: sustained near-zero speed despite a controller_target that says go.
-  stuck_despite_go_signal = bool(np.any(
-    (np.abs(speed) < 0.1) & (controller_target > 5.0)
-  )) and float(np.sum((np.abs(speed) < 0.1) & (controller_target > 5.0)) * (time[1] - time[0] if time.size > 1 else 0.0)) > 30.0
+  # limit. Flag it structurally: one sustained (contiguous) near-zero-speed run despite a
+  # controller_target that says go - not the aggregate of many short launch-transient blips (a car
+  # legitimately reads v_ego<0.1 for a few tenths of a second right as it starts moving, and a route
+  # with enough launches sums past any reasonable total-time threshold without ever really stalling).
+  dt = float(time[1] - time[0]) if time.size > 1 else 0.0
+  stuck_mask = (np.abs(speed) < 0.1) & (controller_target > 5.0)
+  longest_stuck_run = 0
+  if stuck_mask.any():
+    run = 0
+    for is_stuck in stuck_mask:
+      run = run + 1 if is_stuck else 0
+      longest_stuck_run = max(longest_stuck_run, run)
+  stuck_despite_go_signal = bool(longest_stuck_run * dt > 30.0)
 
   return RouteRunResult(
     route_id=route.identifier, sweep=sweep, duration=float(end_time), frames=time.size, solver_failures=solver_failures,
