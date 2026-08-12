@@ -29,6 +29,7 @@ def _slew(current: float, target: float, rate: float, dt: float) -> float:
 class Pace:
   def __init__(self) -> None:
     self.lead_speed_samples = [math.inf] * CAP_FILTER_FRAMES
+    self.lead_accel_samples = [0.0] * CAP_FILTER_FRAMES
 
     self.cap_trusted = math.inf
     self.relief_streak = 0
@@ -63,6 +64,10 @@ class Pace:
   def filtered_lead_speed(self) -> float:
     return _median(self.lead_speed_samples)
 
+  @property
+  def filtered_lead_accel(self) -> float:
+    return _median(self.lead_accel_samples)
+
   def reset(self) -> None:
     self.__init__()  # noqa: PLC2801
 
@@ -82,10 +87,14 @@ class Pace:
     if not self.has_lead:
       self.lead_speed_samples.append(math.inf)
       self.lead_speed_samples.pop(0)
+      self.lead_accel_samples.append(0.0)
+      self.lead_accel_samples.pop(0)
       return
     if self.raw_cap <= self.cap_trusted + 1e-9:
       self.lead_speed_samples.append(lead_plan.selected_lead_speed)
       self.lead_speed_samples.pop(0)
+      self.lead_accel_samples.append(lead_plan.selected_lead_accel)
+      self.lead_accel_samples.pop(0)
 
   def _update_trust_register(self, persist_frames: int, dropout_frames: int, switch_max_frames: int) -> None:
     candidate = self.raw_cap
@@ -215,6 +224,11 @@ class Pace:
       desired_accel_limit = float(np.clip(recovery_speed - v_ego, 0.0, profile_max_accel))
     else:
       desired_accel_limit = 0.0
+    if self.filtered_lead_accel < BRAKING_ACCEL_THRESHOLD:
+      # the matched lead is itself braking hard right now - don't let a stale recovery_speed
+      # calc (which lags the lead's speed, not its accel) hold the ceiling down; pre-position it
+      # at profile_max so a later recovery isn't slew-limited on top of the lead's own braking
+      desired_accel_limit = profile_max_accel
     if self.matched_accel_limit is None:
       self.matched_accel_limit = profile_max_accel
     self.matched_accel_limit = _slew(self.matched_accel_limit, desired_accel_limit, LEAD_MATCH_ACCEL_SLEW, dt)
