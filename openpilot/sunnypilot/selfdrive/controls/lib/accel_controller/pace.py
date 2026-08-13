@@ -11,9 +11,10 @@ import numpy as np
 
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalPlanSource
 from openpilot.sunnypilot.selfdrive.controls.lib.accel_controller.constants import (
-  BRAKING_ACCEL_THRESHOLD, CAP_FILTER_FRAMES, LAUNCH_END_SPEED, LAUNCH_TARGET_HEADROOM, LEAD_MATCH_ACCEL_SLEW,
-  LEAD_MATCH_HEADROOM, MATCHED_SPEED_DECEL_RATE, SPEED_DEADBAND, STOP_HOLD_CREEP_DISTANCE, STOP_HOLD_EGO_SPEED,
-  STOP_HOLD_EXIT_FRAMES, STOP_HOLD_EXIT_SPEED, STOP_HOLD_MAX_LEAD_DISTANCE, STOP_HOLD_SPEED_FLOOR, TARGET_RELEASE_SLEW,
+  BRAKING_ACCEL_THRESHOLD, CAP_FILTER_FRAMES, DISTANCE_JUMP_CONFIRM_STREAK, LAUNCH_END_SPEED, LAUNCH_TARGET_HEADROOM,
+  LEAD_MATCH_ACCEL_SLEW, LEAD_MATCH_HEADROOM, MATCHED_SPEED_DECEL_RATE, SPEED_DEADBAND, STOP_HOLD_CREEP_DISTANCE,
+  STOP_HOLD_EGO_SPEED, STOP_HOLD_EXIT_FRAMES, STOP_HOLD_EXIT_SPEED, STOP_HOLD_MAX_LEAD_DISTANCE, STOP_HOLD_SPEED_FLOOR,
+  TARGET_RELEASE_SLEW,
 )
 from openpilot.sunnypilot.selfdrive.controls.lib.accel_controller.lead import LeadPlan
 
@@ -50,6 +51,7 @@ class Pace:
     self.motion_ref: float | None = None
     self.last_raw_distance: float | None = None
     self.pending_reject_delta: float | None = None
+    self.pending_reject_streak = 0
     self.lead_braking = False
     self._active_frames = 0
 
@@ -127,15 +129,18 @@ class Pace:
       max_step = max(STOP_HOLD_CREEP_DISTANCE / 2.0, 3.0 * max(lead_speed, 0.0) * dt)
       delta = raw - self.last_raw_distance
       if abs(delta) > max_step:
-        progressing = (self.pending_reject_delta is not None and delta * self.pending_reject_delta > 0.0
-                       and abs(delta) > abs(self.pending_reject_delta))
-        if progressing:
+        growing = (self.pending_reject_delta is not None and delta * self.pending_reject_delta > 0.0
+                   and abs(delta) > abs(self.pending_reject_delta))
+        self.pending_reject_streak = self.pending_reject_streak + 1 if growing else 1
+        self.pending_reject_delta = delta
+        if self.pending_reject_streak > DISTANCE_JUMP_CONFIRM_STREAK:
           self.pending_reject_delta = None
+          self.pending_reject_streak = 0
         else:
-          self.pending_reject_delta = delta
           raw = self.last_raw_distance
       else:
         self.pending_reject_delta = None
+        self.pending_reject_streak = 0
     self.last_raw_distance = raw
     return raw
 

@@ -44,6 +44,7 @@ STOP_HOLD_EXIT_SPEED = 0.80     # fast-lane: unambiguous departure, skip the gro
 STOP_HOLD_EXIT_FRAMES = 4
 STOP_HOLD_CREEP_DISTANCE = 0.30
 STOP_HOLD_MAX_LEAD_DISTANCE = 30.0  # a nearly-stopped lead farther than this can't arm stop-hold on cap alone
+DISTANCE_JUMP_CONFIRM_STREAK = 2       # consecutive strictly-growing rejected jumps needed before trusting one
 
 STOP_GAP_RESERVE = 0.75
 
