@@ -49,6 +49,7 @@ class Pace:
     self.no_departure_lead_frames = 0
     self.motion_ref: float | None = None
     self.last_raw_distance: float | None = None
+    self.pending_reject_delta: float | None = None
     self.lead_braking = False
     self._active_frames = 0
 
@@ -124,8 +125,17 @@ class Pace:
   def _guarded_distance(self, raw: float, lead_speed: float, dt: float) -> float:
     if self.last_raw_distance is not None:
       max_step = max(STOP_HOLD_CREEP_DISTANCE / 2.0, 3.0 * max(lead_speed, 0.0) * dt)
-      if abs(raw - self.last_raw_distance) > max_step:
-        raw = self.last_raw_distance
+      delta = raw - self.last_raw_distance
+      if abs(delta) > max_step:
+        progressing = (self.pending_reject_delta is not None and delta * self.pending_reject_delta > 0.0
+                       and abs(delta) > abs(self.pending_reject_delta))
+        if progressing:
+          self.pending_reject_delta = None
+        else:
+          self.pending_reject_delta = delta
+          raw = self.last_raw_distance
+      else:
+        self.pending_reject_delta = None
     self.last_raw_distance = raw
     return raw
 
