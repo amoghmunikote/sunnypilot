@@ -171,6 +171,8 @@ def test_mpc_inherits_accel_controller_extension_without_changing_stock_signatur
 
   mpc.set_accel_controller_params(None, 1.0, 0.4)
   assert mpc.cruise_accel_max(1.6) == 0.4
+  mpc.set_accel_controller_params(None, 1.0, 0.0)
+  assert mpc.cruise_accel_max(1.6) == 0.0
 
   requested_ceiling = tuple(np.full(N + 1, 0.4))
   mpc.set_accel_controller_params(requested_ceiling, 1.0)
@@ -252,10 +254,11 @@ def test_active_acc_uses_target_and_ceiling_in_exactly_one_solve():
   assert config == (ceiling, 1.0, None)
 
 
-def test_cruise_accel_ceiling_is_forwarded_to_mpc():
-  planner, _ = planner_for_mpc_test(cruise_accel_max=0.3)
+@pytest.mark.parametrize("cruise_accel_max", (0.0, 0.3))
+def test_cruise_accel_ceiling_is_forwarded_to_mpc(cruise_accel_max):
+  planner, _ = planner_for_mpc_test(cruise_accel_max=cruise_accel_max)
   _, _, config = prepare_controller_mpc(planner)
-  assert config == (None, 1.0, 0.3)
+  assert config == (None, 1.0, cruise_accel_max)
 
 
 def test_valid_lead_stop_hold_preplans_from_raw_target_without_an_accel_ceiling():

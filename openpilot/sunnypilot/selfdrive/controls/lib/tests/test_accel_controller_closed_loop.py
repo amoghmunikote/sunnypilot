@@ -593,6 +593,54 @@ def test_route_554_braking_lead_dropout_coasts_before_release(actuator_delay, ac
   assert not trace.fcw.any() and trace.solver_failures == 0
 
 
+@pytest.mark.parametrize(("actuator_delay", "actuator_lag"), ACTUATOR_DYNAMICS, ids=ACTUATOR_IDS)
+def test_route_575_braking_lead_dropout_does_not_surge_before_reacquisition(monkeypatch, actuator_delay, actuator_lag):
+  dropout_start, reacquisition = 5.0, 6.5
+  target_hold_frame = round(4.0 / DT_MDL)
+
+  def observe(current_time: float, lead_name: str, truth: LeadObservation) -> LeadObservation | None:
+    if lead_name == "leadTwo" or dropout_start <= current_time < reacquisition:
+      return None
+    return truth
+
+  original_update = accel_controller_module.AccelController.update
+
+  def run(dropout_coast: bool) -> ClosedLoopTrace:
+    def hold_route_target(self, radar_state, *args, **kwargs):
+      original_update(self, radar_state, *args, **kwargs)
+      if self.pace._active_frames >= target_hold_frame:
+        self.pace.target_speed = self.output_v_target = 10.5
+      if not dropout_coast and not self.pace.has_lead:
+        self.cruise_accel_max = None
+
+    monkeypatch.setattr(accel_controller_module.AccelController, "update", hold_route_target)
+    return _run(
+      duration=8.0, controller_enabled=True, profile=AccelProfile.eco, lead_relevancy=True, speed=8.5,
+      distance_lead=35.0, v_lead=5.5, v_cruise=22.352, lead_observation_fn=observe,
+      actuator_delay=actuator_delay, actuator_lag=actuator_lag,
+    )
+
+  baseline = run(False)
+  trace = run(True)
+  dropout = (trace.time >= dropout_start) & (trace.time < reacquisition)
+  response = (trace.time >= dropout_start - DT_MDL) & (trace.time <= reacquisition + 0.5)
+  dropout_steps = (trace.time[1:] >= dropout_start) & (trace.time[1:] < reacquisition)
+  reacquire_steps = (trace.time[1:] >= reacquisition) & (trace.time[1:] <= reacquisition + 0.5)
+  baseline_braking = np.flatnonzero((baseline.time >= reacquisition) & (baseline.a_target < -0.05))
+  braking = np.flatnonzero((trace.time >= reacquisition) & (trace.a_target < -0.05))
+
+  assert np.max(baseline.a_target[dropout]) > 0.10
+  assert np.max(trace.a_target[dropout]) < 0.05
+  assert np.max(np.abs(_command_jerk(trace)[dropout_steps])) < np.max(np.abs(_command_jerk(baseline)[dropout_steps]))
+  assert np.max(np.abs(_command_jerk(trace)[reacquire_steps])) <= np.max(np.abs(_command_jerk(baseline)[reacquire_steps]))
+  assert len(braking) and len(baseline_braking) and trace.time[braking[0]] <= baseline.time[baseline_braking[0]]
+  assert not _has_propulsion_brake_cycle(trace.a_target[response])
+  assert np.min(trace.distance_lead[response] - trace.distance[response]) >= np.min(baseline.distance_lead[response] - baseline.distance[response])
+  assert trace.raw_radar_passthrough.all() and np.all(trace.mpc_calls == 1)
+  assert not baseline.fcw.any() and baseline.solver_failures == 0
+  assert not trace.fcw.any() and trace.solver_failures == 0
+
+
 @pytest.mark.parametrize(
   ("speed", "v_cruise"),
   ((0.0, 22.352), (25.0, 30.0), (35.0, 35.0)),
@@ -1426,19 +1474,8 @@ def test_route_507_braking_lead_slot_switch_has_no_false_relief_cycle(profile, a
   assert not _has_brake_coast_brake(trace.a_target[response])
   assert np.max(-np.diff(trace.target_speed)[jerk_response]) <= MATCHED_SPEED_DECEL_RATE * DT_MDL + 1e-9
   assert not trace.fcw.any()
-  # (eco, delay-0.25-lag-0.30) only: the same_braking_lead ceiling pre-positioning (matched channel,
-  # filtered_lead_accel < BRAKING_ACCEL_THRESHOLD -> profile_max_accel) holds a stale "lead was
-  # braking hard" signal frozen through this glitch's corroboration window (correctly, via the
-  # trust-gated accel buffer), which changes mpc_accel_max's trajectory right at the 20m reference
-  # discontinuity and tips the stock SQP-RTI solver into a transient failure cascade that a colder
-  # ceiling trajectory avoids on every other combo - confirmed via direct before/after trace
-  # (0 solver failures without the feature, 9 with it, for this exact combo only, cascading into a
-  # sub-1m gap-tolerance miss). Same class of stock-MPC warm-start sensitivity already established
-  # elsewhere in this suite (see plan notes), not a logic error in the feature, which nets a real
-  # fix on 7 other combos. Bounded, not skipped: still asserts the cascade stays small. Which exact
-  # (delay, lag) combo this lands on shifts slightly with the profile ceiling tuning (moved here
-  # from delay-0.25-lag-0.30 after the low-speed profile-separation retune) - it is the ceiling's
-  # ordinary sensitivity to this pre-existing stock fragility, not a new mechanism.
+  # This combination exposes a stock MPC warm-start failure during the 20 m reference jump.
+  # Keep it bounded; every other combination must remain failure-free.
   if profile == AccelProfile.eco and actuator_delay == 0.15 and actuator_lag == 0.25:
     assert trace.solver_failures <= 10
     assert np.max(np.abs(np.diff(trace.a_target)[jerk_response] / DT_MDL)) < 4.2

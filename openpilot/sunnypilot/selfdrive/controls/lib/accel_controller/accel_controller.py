@@ -29,6 +29,7 @@ class AccelController:
     self.delay = float(CP.longitudinalActuatorDelay) + DT_MDL
     self.persist_frames = max(CAP_FILTER_FRAMES, math.ceil(PERSIST_TIME / dt))
     self.dropout_frames = max(self.persist_frames, math.ceil(LEAD_DROPOUT_COAST_TIME / dt))
+    self.dropout_release_frames = max(1, self.dropout_frames - self.persist_frames)
     self.switch_max_frames = max(self.dropout_frames, math.ceil(LEAD_SWITCH_MAX_HOLD_TIME / dt))
     self.radar_stale_frames = max(1, math.ceil(RADAR_STALE_TIMEOUT / dt))
     self.params = Params()
@@ -142,6 +143,7 @@ class AccelController:
 
     matched_limit_active = pace.matched_lead and pace.matched_accel_limit is not None and not pace.e2e_braking_handoff
     lead_accel_request = pace.matched_lead and planner_accel >= 0.0
+    dropout_coast = pace.braking_lead_dropout
     profile_limit_active = (not pace.stop_hold and (not pace.has_lead or lead_accel_request)
                             and not pace.e2e_braking_handoff)
     if matched_limit_active:
@@ -159,7 +161,11 @@ class AccelController:
     keep_cruise_accel_limit = (self._cruise_accel_limited and lead_context and not pace.restricting and not pace.releasing
                                and not pace.e2e_braking_handoff)
     self._cruise_accel_limited = start_cruise_accel_limit or keep_cruise_accel_limit
-    self.cruise_accel_max = positive_accel_max if self._cruise_accel_limited else None
+    if dropout_coast:
+      release_frame = max(0, pace.lead_loss_frames - self.persist_frames)
+      self.cruise_accel_max = positive_accel_max * release_frame / self.dropout_release_frames
+    else:
+      self.cruise_accel_max = positive_accel_max if self._cruise_accel_limited else None
 
     if pace.stop_hold:
       self.state = AccelControllerState.stopHold

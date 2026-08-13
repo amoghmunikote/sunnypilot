@@ -416,6 +416,38 @@ class TestTargetLawAndTrustRegister:
     assert released[-1].target_speed >= 25.0 - 0.15 - 1e-9
     assert released[-1].state == AccelControllerState.free
 
+  def test_restricting_lead_dropout_coasts_before_release(self):
+    controller = make_controller()
+    for _ in range(15):
+      update(controller, restrictive_radar(), planner_accel=-0.5)
+
+    coast = update(controller, planner_accel=-0.5)
+
+    assert coast.cruise_accel_max == 0.0
+    assert coast.mpc_accel_max is not None
+    assert effective_accel_max(coast) == pytest.approx(profile_accel_max(AccelProfile.normal, 10.0))
+
+    ceilings = [coast.cruise_accel_max]
+    ceilings.extend(update(controller, planner_accel=-0.5).cruise_accel_max for _ in range(controller.dropout_frames - 1))
+    assert ceilings == sorted(ceilings)
+    assert ceilings[-1] == pytest.approx(profile_accel_max(AccelProfile.normal, 10.0))
+
+  def test_braking_lead_dropout_lifecycle(self):
+    controller = make_controller()
+    for _ in range(15):
+      update(controller, restrictive_radar(), planner_accel=-0.5)
+
+    update(controller, planner_accel=-0.5)
+    assert controller.pace.braking_lead_dropout
+
+    update(controller, restrictive_radar(), planner_accel=0.2)
+    assert not controller.pace.braking_lead_dropout
+    update(controller, planner_accel=0.2)
+    assert not controller.pace.braking_lead_dropout
+
+    controller.reset()
+    assert not controller.pace.braking_lead_dropout
+
 
 class TestMatchedLead:
   def test_matched_accel_limit_unthrottled_when_ego_well_below_lead_speed(self):

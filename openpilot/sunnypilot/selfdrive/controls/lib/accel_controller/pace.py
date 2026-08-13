@@ -37,6 +37,7 @@ class Pace:
     self.relief_hold_elapsed = 0
     self.lead_loss_frames = 0
     self._loss_was_restricting = False
+    self._loss_was_braking = False
 
     self.target_speed: float | None = None
     self.e2e_braking_handoff = False
@@ -71,14 +72,19 @@ class Pace:
   def filtered_lead_accel(self) -> float:
     return _median(self.lead_accel_samples)
 
+  @property
+  def braking_lead_dropout(self) -> bool:
+    return not self.has_lead and self._loss_was_restricting and self._loss_was_braking and math.isfinite(self.cap_trusted)
+
   def reset(self) -> None:
-    self.__init__()  # noqa: PLC2801
+    self.__init__()
 
   def _update_lead_bookkeeping(self, lead_plan: LeadPlan, was_restricting: bool) -> None:
     self.has_lead = lead_plan.selected_lead >= 0
     self.raw_cap = lead_plan.cap if self.has_lead else math.inf
     if self.has_lead:
       self.lead_loss_frames = 0
+      self._loss_was_braking = False
     else:
       if self.lead_loss_frames == 0:
         self._loss_was_restricting = was_restricting
@@ -144,6 +150,10 @@ class Pace:
     self.last_raw_distance = raw
     return raw
 
+  def _reset_distance_guard(self) -> None:
+    self.last_raw_distance = self.pending_reject_delta = None
+    self.pending_reject_streak = 0
+
   def _update_stop_hold(self, lead_plan: LeadPlan, v_ego: float, base_speed: float, dt: float) -> bool:
     if self.stop_hold:
       has_departure_lead = lead_plan.departure_lead_index >= 0
@@ -162,6 +172,7 @@ class Pace:
       else:
         self.confirm_frames = 0
         self.motion_ref = None
+        self._reset_distance_guard()
 
       growth = 0.0
       if self.confirm_frames > 0 and self.motion_ref is not None and distance is not None:
@@ -196,6 +207,7 @@ class Pace:
       stopped_lead_hold or (math.isfinite(self.cap_trusted) and self.cap_trusted < STOP_HOLD_SPEED_FLOOR)
     ):
       self.stop_hold = True
+      self._reset_distance_guard()
       self.launching = self.departure_launching = False
       self.matched_lead = False
       self.confirm_frames = 0
@@ -218,6 +230,7 @@ class Pace:
       self.launching = self.departure_launching = False
       if v_ego < STOP_HOLD_EGO_SPEED:
         self.stop_hold = True
+        self._reset_distance_guard()
         self.confirm_frames = 0
         self.motion_ref = None
         self.no_departure_lead_frames = 0
@@ -288,6 +301,8 @@ class Pace:
                             and self.cap_trusted - v_ego < LEAD_MATCH_HEADROOM)
     self.restricting = self.releasing = False
     self._update_lead_bookkeeping(lead_plan, was_restricting or holding_below_cruise)
+    if not self.has_lead and self.lead_loss_frames == 1:
+      self._loss_was_braking = self.lead_braking and planner_accel <= BRAKING_ACCEL_THRESHOLD
     self._update_trust_register(persist_frames, dropout_frames, switch_max_frames)
     self._update_speed_sample(lead_plan)
     self.required_decel = lead_plan.required_decel

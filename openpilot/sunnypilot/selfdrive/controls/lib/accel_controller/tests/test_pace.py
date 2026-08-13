@@ -100,6 +100,45 @@ def test_route_520_slow_lead_pulse_cannot_release_stop_hold_or_dampen_real_depar
   assert target > 0.0
 
 
+def test_repeated_stop_reseeds_departure_distance():
+  pace = Pace()
+  for _ in range(20):
+    _run(pace, _lead_plan(0.0, 6.0), base_speed=8.0, v_ego=0.0)
+  for frame in range(20):
+    _run(pace, _lead_plan(2.0, 6.0 + 2.0 * (frame + 1) * DT), base_speed=8.0, v_ego=min(3.5, frame * 0.3))
+
+  for _ in range(10):
+    _run(pace, _lead_plan(0.0, 3.0), base_speed=8.0, v_ego=0.0)
+  assert pace.stop_hold
+
+  released_frame = None
+  for frame in range(60):
+    _run(pace, _lead_plan(0.2, 3.0 + 0.2 * (frame + 1) * DT), base_speed=8.0, v_ego=0.0)
+    if not pace.stop_hold:
+      released_frame = frame
+      break
+
+  assert released_frame is not None
+  assert released_frame * DT <= 2.0
+
+
+def test_departure_dropout_reseeds_distance_guard():
+  pace = Pace()
+  for _ in range(20):
+    _run(pace, _lead_plan(0.0, 6.0), base_speed=8.0, v_ego=0.0)
+  _run(pace, _no_lead(), base_speed=8.0, v_ego=0.0)
+
+  released_frame = None
+  for frame in range(60):
+    _run(pace, _lead_plan(0.2, 3.0 + 0.2 * (frame + 1) * DT), base_speed=8.0, v_ego=0.0)
+    if not pace.stop_hold:
+      released_frame = frame
+      break
+
+  assert released_frame is not None
+  assert released_frame * DT <= 2.0
+
+
 def test_trust_register_accepts_tightening_immediately():
   pace = Pace()
   _run(pace, _lead_plan(20.0, 100.0, cap=25.0), base_speed=30.0, v_ego=20.0)
