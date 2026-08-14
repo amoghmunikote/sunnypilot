@@ -23,7 +23,7 @@ if gui_app.sunnypilot_ui():
 
 # Description constants
 DESCRIPTIONS = {
-  'pair_device': tr_noop("Pair your device with comma connect (connect.comma.ai) and claim your comma prime offer."),
+  'pair_device': tr_noop("Pair your device with comma connect (stable.konik.ai) and claim your comma prime offer."),
   'driver_camera': tr_noop("Preview the driver facing camera to ensure that driver monitoring has good visibility. (vehicle must be off)"),
   'reset_calibration': tr_noop("sunnypilot requires the device to be mounted within 4° left or right and within 5° up or 9° down."),
   'review_guide': tr_noop("Review the rules, features, and limitations of sunnypilot"),

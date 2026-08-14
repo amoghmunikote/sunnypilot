@@ -36,7 +36,7 @@ void printUsage(const char *argv0) {
   fprintf(stderr,
           "Usage: %s [options] [route]\n"
           "\n"
-          "  route                     the drive to replay. find your drives at connect.comma.ai\n"
+          "  route                     the drive to replay. find your drives at stable.konik.ai\n"
           "\n"
           "Options:\n"
           "  --help                    show this help\n"

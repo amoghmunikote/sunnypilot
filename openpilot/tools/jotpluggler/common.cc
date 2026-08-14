@@ -158,12 +158,12 @@ void open_external_url(std::string_view url) {
 
 std::string route_useradmin_url(const RouteIdentifier &route_id) {
   return route_id.empty() ? std::string()
-                          : "https://useradmin.comma.ai/?onebox=" + route_id.dongle_id + "%7C" + route_id.log_id;
+                          : "https://useradmin.konik.ai/?onebox=" + route_id.dongle_id + "%7C" + route_id.log_id;
 }
 
 std::string route_connect_url(const RouteIdentifier &route_id) {
   return route_id.empty() ? std::string()
-                          : "https://connect.comma.ai/" + route_id.canonical();
+                          : "https://stable.konik.ai/" + route_id.canonical();
 }
 
 std::string route_google_maps_url(const GpsTrace &trace) {

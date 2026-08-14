@@ -122,7 +122,7 @@ class DeviceInfoLayoutMici(Widget):
 
 class PairBigButton(BigButton):
   def __init__(self):
-    super().__init__("pair", "connect.comma.ai", gui_app.texture("icons_mici/settings/comma_icon.png", 33, 60))
+    super().__init__("pair", "stable.konik.ai", gui_app.texture("icons_mici/settings/comma_icon.png", 33, 60))
 
   def _get_label_font_size(self):
     return 64
@@ -138,7 +138,7 @@ class PairBigButton(BigButton):
         self.set_value("upgrade to prime")
     else:
       self.set_text("pair")
-      self.set_value("connect.comma.ai")
+      self.set_value("stable.konik.ai")
 
   def _handle_mouse_release(self, mouse_pos: MousePos):
     super()._handle_mouse_release(mouse_pos)
