@@ -68,9 +68,9 @@ class TestLogReader:
     (f"{TEST_ROUTE}/-4:-2", ALL_SEGS[-4:-2]),
     (f"{TEST_ROUTE}/:10:2", ALL_SEGS[:10:2]),
     (f"{TEST_ROUTE}/5::2", ALL_SEGS[5::2]),
-    (f"https://useradmin.comma.ai/?onebox={TEST_ROUTE}", ALL_SEGS),
-    (f"https://useradmin.comma.ai/?onebox={TEST_ROUTE.replace('/', '|')}", ALL_SEGS),
-    (f"https://useradmin.comma.ai/?onebox={TEST_ROUTE.replace('/', '%7C')}", ALL_SEGS),
+    (f"https://useradmin.konik.ai/?onebox={TEST_ROUTE}", ALL_SEGS),
+    (f"https://useradmin.konik.ai/?onebox={TEST_ROUTE.replace('/', '|')}", ALL_SEGS),
+    (f"https://useradmin.konik.ai/?onebox={TEST_ROUTE.replace('/', '%7C')}", ALL_SEGS),
   ])
   @pytest.mark.skip("this got flaky. internet tests are stupid.")
   def test_indirect_parsing(self, identifier, expected):
